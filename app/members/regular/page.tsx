@@ -51,11 +51,19 @@ function buildColumns(meetings: Meeting[]): Col[] {
   return cols;
 }
 
+function computeVotingMember(member: RegularMember): boolean {
+  const duesPaidCount = QUARTERS.filter((q) => member.dues?.[q.key] === true).length;
+  const attendanceCount = Object.values(member.attendance ?? {}).filter(Boolean).length;
+  return duesPaidCount >= 3 && attendanceCount >= 6;
+}
+
 export default function RegularMembersPage() {
   const [members, setMembers] = useState<RegularMember[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sheetSyncing, setSheetSyncing] = useState(false);
+  const [sheetSyncMsg, setSheetSyncMsg] = useState<string | null>(null);
   const [pendingChanges, setPendingChanges] = useState<Record<string, Record<string, boolean>>>({});
   // 저장된 원본 상태: memberId -> fieldPath -> value
   const savedStateRef = useRef<Record<string, Record<string, boolean>>>({});
@@ -156,6 +164,27 @@ export default function RegularMembersPage() {
     });
     setPendingChanges({});
     setSaving(false);
+
+    // 구글 시트 자동 동기화 (실패해도 저장은 완료)
+    syncToSheets();
+  };
+
+  const syncToSheets = async () => {
+    setSheetSyncing(true);
+    setSheetSyncMsg(null);
+    try {
+      const res = await fetch("/api/regular-members/sync-sheets", { method: "POST" });
+      if (res.ok) {
+        setSheetSyncMsg("시트 반영 완료");
+      } else {
+        const data = await res.json();
+        setSheetSyncMsg(`시트 반영 실패: ${data.error ?? res.status}`);
+      }
+    } catch {
+      setSheetSyncMsg("시트 반영 실패");
+    } finally {
+      setSheetSyncing(false);
+    }
   };
 
   const pendingCount = Object.keys(pendingChanges).length;
@@ -178,10 +207,22 @@ export default function RegularMembersPage() {
     <div className="py-6 pb-32">
       <div className="flex items-center justify-between mb-2">
         <h1 className="text-xl font-bold">정회원 출석부</h1>
-        <Link href="/members" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-          회원 목록 →
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={syncToSheets}
+            disabled={sheetSyncing}
+            className="text-xs text-primary/70 hover:text-primary transition-colors disabled:opacity-40"
+          >
+            {sheetSyncing ? "동기화 중..." : "시트 동기화"}
+          </button>
+          <Link href="/members" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            회원 목록 →
+          </Link>
+        </div>
       </div>
+      {sheetSyncMsg && (
+        <p className="text-xs text-center text-muted-foreground mb-2">{sheetSyncMsg}</p>
+      )}
       <div className="text-xs text-muted-foreground bg-muted/60 rounded-xl px-4 py-3 mb-4 space-y-1">
         <p>· 셀을 탭하면 출석(참) / 미출석으로 토글됩니다.</p>
         <p>· 회비 셀은 탭할 때마다 납부(O) → 미납(X) → 미설정 순으로 변경됩니다.</p>
@@ -212,7 +253,7 @@ export default function RegularMembersPage() {
               ) : (
                 <div
                   key={col.quarter.key}
-                  className={`${DUES_W} flex flex-col items-center justify-center py-2 border-r border-violet-300/35 text-xs font-semibold text-primary ${i === columns.length - 1 ? "border-r-0" : ""}`}
+                  className={`${DUES_W} flex flex-col items-center justify-center py-2 border-r border-violet-300/35 text-xs font-semibold text-primary`}
                   style={{ background: "oklch(0.54 0.23 293 / 0.04)" }}
                 >
                   <span>{col.quarter.label}</span>
@@ -220,6 +261,14 @@ export default function RegularMembersPage() {
                 </div>
               )
             )}
+            {/* 권리당원 여부 열 헤더 */}
+            <div
+              className="w-14 min-w-[56px] flex flex-col items-center justify-center py-2 text-xs font-semibold text-primary/80"
+              style={{ background: "oklch(0.54 0.23 293 / 0.06)" }}
+            >
+              <span>권리</span>
+              <span>당원</span>
+            </div>
           </div>
 
           {/* 행 */}
@@ -281,7 +330,7 @@ export default function RegularMembersPage() {
                       <button
                         key={col.quarter.key}
                         onClick={() => toggle(member.id, fieldPath, paid ?? false)}
-                        className={`${DUES_W} flex items-center justify-center ${isLast ? "" : "border-r"} border-violet-300/35 transition-all active:scale-95 ${
+                        className={`${DUES_W} flex items-center justify-center border-r border-violet-300/35 transition-all active:scale-95 ${
                           isPendingCell ? "bg-amber-50/50" :
                           paid === true ? "bg-green-50/40" :
                           paid === false ? "bg-red-50/40" :
@@ -300,6 +349,27 @@ export default function RegularMembersPage() {
                     );
                   }
                 })}
+                {/* 권리당원 여부 셀 (자동 계산) */}
+                {(() => {
+                  const isVoting = computeVotingMember(member);
+                  return (
+                    <div
+                      className={`w-14 min-w-[56px] flex items-center justify-center ${
+                        isVoting ? "bg-green-50/40" : "bg-red-50/20"
+                      }`}
+                      style={{ minHeight: 44, background: isVoting ? undefined : "oklch(0.54 0.23 293 / 0.01)" }}
+                      title={isVoting ? "권리당원" : "비권리당원"}
+                    >
+                      <span className={`text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center ${
+                        isVoting
+                          ? "text-green-600 bg-green-100/70"
+                          : "text-red-400 bg-red-100/50"
+                      }`}>
+                        {isVoting ? "O" : "X"}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}

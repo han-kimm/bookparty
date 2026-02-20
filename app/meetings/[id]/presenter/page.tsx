@@ -46,6 +46,7 @@ export default function PresenterPage({ params }: { params: Promise<{ id: string
   const [syncing, setSyncing] = useState(false);
   const [creatingForm, setCreatingForm] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [saveResult, setSaveResult] = useState<"ok" | "error" | null>(null);
   const [formUrlInput, setFormUrlInput] = useState("");   // 입력 중인 URL (아직 저장 안 됨)
   const [savingFormUrl, setSavingFormUrl] = useState(false);
 
@@ -68,13 +69,14 @@ export default function PresenterPage({ params }: { params: Promise<{ id: string
 
   const handleSave = async () => {
     setSaving(true);
-    await fetch(`/api/meetings/${id}`, {
+    setSaveResult(null);
+    const res = await fetch(`/api/meetings/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
     });
     setSaving(false);
-    router.push("/meetings");
+    setSaveResult(res.ok ? "ok" : "error");
   };
 
   const handleDelete = async () => {
@@ -299,12 +301,18 @@ export default function PresenterPage({ params }: { params: Promise<{ id: string
 
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => router.back()}>
-              취소
+              뒤로
             </Button>
             <Button className="flex-1" onClick={handleSave} disabled={saving}>
               {saving ? "저장 중..." : "저장"}
             </Button>
           </div>
+          {saveResult === "ok" && (
+            <p className="text-sm text-center text-green-600">저장됐습니다.</p>
+          )}
+          {saveResult === "error" && (
+            <p className="text-sm text-center text-destructive">저장에 실패했습니다.</p>
+          )}
 
           <AlertDialog>
             <AlertDialogTrigger asChild>

@@ -22,6 +22,13 @@ function getAuth() {
   });
 }
 
+function resolveAuth(accessToken?: string) {
+  if (!accessToken) return getAuth();
+  const oauth2 = new google.auth.OAuth2();
+  oauth2.setCredentials({ access_token: accessToken });
+  return oauth2;
+}
+
 function extractFormId(formUrl: string): string {
   const match = formUrl.match(/\/forms\/d\/([a-zA-Z0-9_-]+)/);
   if (!match) throw new Error("유효하지 않은 구글폼 URL입니다.");
@@ -73,10 +80,10 @@ export async function getFormResponses(formUrl: string): Promise<FormResponse[]>
   });
 }
 
-export async function updateFormKakaoUrl(formUrl: string, kakaoUrl: string): Promise<void> {
+export async function updateFormKakaoUrl(formUrl: string, kakaoUrl: string, accessToken?: string): Promise<void> {
   const formId = extractFormId(formUrl);
-  const auth = getAuth();
-  const forms = google.forms({ version: "v1", auth });
+  const authClient = resolveAuth(accessToken);
+  const forms = google.forms({ version: "v1", auth: authClient });
 
   const formData = await forms.forms.get({ formId });
   const items = formData.data.items ?? [];
@@ -152,10 +159,10 @@ export function buildFormDescription({
   return desc;
 }
 
-export async function updateFormTitle(formUrl: string, newTitle: string, description?: string): Promise<void> {
+export async function updateFormTitle(formUrl: string, newTitle: string, description?: string, accessToken?: string): Promise<void> {
   const formId = extractFormId(formUrl);
-  const auth = getAuth();
-  const forms = google.forms({ version: "v1", auth });
+  const authClient = resolveAuth(accessToken);
+  const forms = google.forms({ version: "v1", auth: authClient });
 
   await forms.forms.batchUpdate({
     formId,

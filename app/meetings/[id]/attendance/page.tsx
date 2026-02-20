@@ -33,6 +33,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
   const [adding, setAdding] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   const [saving, setSaving] = useState(false);
+  const [sheetSyncing, setSheetSyncing] = useState(false);
+  const [sheetSyncResult, setSheetSyncResult] = useState<"ok" | "error" | null>(null);
   const [importing, setImporting] = useState(false);
   const [creatingForm, setCreatingForm] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -114,6 +116,22 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
     setSavedState((prev) => ({ ...prev, ...pendingChanges }));
     setPendingChanges({});
     setSaving(false);
+
+    // 구글 시트에 비동기 동기화 (실패해도 저장은 완료)
+    syncToSheets();
+  };
+
+  const syncToSheets = async () => {
+    setSheetSyncing(true);
+    setSheetSyncResult(null);
+    try {
+      const res = await fetch(`/api/meetings/${id}/sync-sheets`, { method: "POST" });
+      setSheetSyncResult(res.ok ? "ok" : "error");
+    } catch {
+      setSheetSyncResult("error");
+    } finally {
+      setSheetSyncing(false);
+    }
   };
 
   const addMember = async () => {
@@ -312,6 +330,33 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
             <p className="text-2xl font-semibold text-black">{members.length - checkedCount}명</p>
             <p className="text-sm text-black/60">미체크</p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* 구글 시트 동기화 */}
+      <Card>
+        <CardContent className="p-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">구글 시트 출석부</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {sheetSyncing
+                ? "시트에 반영 중..."
+                : sheetSyncResult === "ok"
+                  ? "시트 반영 완료"
+                  : sheetSyncResult === "error"
+                    ? "시트 반영 실패 — 다시 시도"
+                    : "출석 저장 시 자동으로 시트에 반영됩니다"}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={syncToSheets}
+            disabled={sheetSyncing || members.length === 0}
+            className="shrink-0"
+          >
+            {sheetSyncing ? "동기화 중..." : "지금 동기화"}
+          </Button>
         </CardContent>
       </Card>
 
