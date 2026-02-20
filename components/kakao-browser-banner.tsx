@@ -12,24 +12,15 @@ export function KakaoBrowserBanner() {
     if (/Android/i.test(ua)) {
       const url = window.location.href.replace(/^https?:\/\//, "");
       const chromeIntent = `intent://${url}#Intent;scheme=https;package=com.android.chrome;end;`;
-      const samsungIntent = `intent://${url}#Intent;scheme=https;package=com.sec.android.app.sbrowser;end;`;
 
-      // 1차: Chrome 시도
+      // Chrome 시도, 미설치 시 수동 안내
       window.location.href = chromeIntent;
 
-      // 2차: Chrome 미설치 시 삼성 브라우저 시도
-      const samsungTimer = setTimeout(() => {
-        window.location.href = samsungIntent;
-
-        // 3차: 둘 다 없을 경우 수동 안내
-        const manualTimer = setTimeout(() => {
-          setPlatform("android-manual");
-        }, 2000);
-
-        return () => clearTimeout(manualTimer);
+      const manualTimer = setTimeout(() => {
+        setPlatform("android-manual");
       }, 2000);
 
-      return () => clearTimeout(samsungTimer);
+      return () => clearTimeout(manualTimer);
     } else if (/iPhone|iPad|iPod/i.test(ua)) {
       setPlatform("ios");
     }
