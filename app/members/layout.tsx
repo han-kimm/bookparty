@@ -7,6 +7,8 @@ export default function MembersLayout({ children }: { children: React.ReactNode 
       <div className="flex gap-1 pt-4 pb-1 border-b">
         <TabLinkClient href="/members" exact>회원 목록</TabLinkClient>
         <TabLinkClient href="/members/regular">정회원 출석부</TabLinkClient>
+        <TabLinkClient href="/members/associate">준회원 출석부</TabLinkClient>
+        <TabLinkClient href="/members/dues">회비</TabLinkClient>
       </div>
       {children}
     </AppLayout>

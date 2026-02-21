@@ -51,6 +51,7 @@ export async function PATCH(
 
   await adminDb.collection("meetings").doc(id).update(body);
 
+  let formSyncError: string | null = null;
   if (current.formUrl) {
     const updated = { ...current, ...body };
     const newTitle = buildFormTitle(updated.title, updated.date);
@@ -65,13 +66,15 @@ export async function PATCH(
       await updateFormTitle(current.formUrl, newTitle, newDesc, accessToken);
     } catch (e) {
       console.error("폼 타이틀/설명 업데이트 실패:", e);
+      formSyncError = "폼 설명 업데이트 실패 (재로그인 후 다시 저장해주세요)";
     }
 
-    if (body.kakaoUrl) {
+    if (body.kakaoUrl && !formSyncError) {
       try {
         await updateFormKakaoUrl(current.formUrl, body.kakaoUrl, accessToken);
       } catch (e) {
         console.error("폼 카카오URL 업데이트 실패:", e);
+        formSyncError = "폼 카카오URL 업데이트 실패";
       }
     }
   }
@@ -106,7 +109,7 @@ export async function PATCH(
     }).catch((err) => console.error("구글 시트 동기화 실패:", err));
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, formSyncError });
 }
 
 export async function DELETE(

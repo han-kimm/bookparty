@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { auth } from "@/lib/auth";
 
@@ -9,7 +9,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const [snapshot, meetingsSnap] = await Promise.all([
-    adminDb.collection("regularMembers").orderBy("order", "asc").get(),
+    adminDb.collection("associateMembers").orderBy("order", "asc").get(),
     adminDb.collection("meetings").get(),
   ]);
 
@@ -48,4 +48,34 @@ export async function GET() {
   });
 
   return NextResponse.json(members);
+}
+
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { nickname } = await req.json();
+  if (!nickname?.trim()) return NextResponse.json({ error: "nickname 필수" }, { status: 400 });
+
+  // 현재 최대 order 계산
+  const snapshot = await adminDb.collection("associateMembers").orderBy("order", "desc").limit(1).get();
+  const maxOrder = snapshot.empty ? 0 : (snapshot.docs[0].data().order as number) ?? 0;
+
+  const ref = await adminDb.collection("associateMembers").add({
+    nickname: nickname.trim(),
+    order: maxOrder + 1,
+  });
+
+  return NextResponse.json({ id: ref.id });
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { id } = await req.json();
+  if (!id) return NextResponse.json({ error: "id 필수" }, { status: 400 });
+
+  await adminDb.collection("associateMembers").doc(id).delete();
+  return NextResponse.json({ ok: true });
 }

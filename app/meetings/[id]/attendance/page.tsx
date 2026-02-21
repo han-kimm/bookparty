@@ -35,6 +35,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
   const [saving, setSaving] = useState(false);
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [sheetSyncResult, setSheetSyncResult] = useState<"ok" | "error" | null>(null);
+  const [regularNicknames, setRegularNicknames] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<"all" | "regular" | "afterparty">("all");
   const [importing, setImporting] = useState(false);
   const [creatingForm, setCreatingForm] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -50,10 +52,26 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
     Promise.all([
       fetch(`/api/meetings/${id}`).then((r) => r.json()),
       fetch(`/api/meetings/${id}/attendance`).then((r) => r.json()),
-    ]).then(([meetingData, membersData]) => {
+      fetch("/api/regular-members").then((r) => r.json()),
+    ]).then(([meetingData, membersData, regularData]) => {
       setMeeting(meetingData);
       const list: AttendanceMember[] = Array.isArray(membersData) ? membersData : [];
-      const sorted = [...list].sort((a, b) => a.nickname.localeCompare(b.nickname, "ko"));
+      const regularSet = new Set<string>(
+        Array.isArray(regularData) ? regularData.map((r: { nickname: string }) => r.nickname.trim()) : []
+      );
+      setRegularNicknames(regularSet);
+      const sorted = [...list].sort((a, b) => {
+        const rank = (m: AttendanceMember, rSet: Set<string>) => {
+          const isReg = rSet.has(m.nickname.trim());
+          if (isReg && m.isAfterparty) return 0;
+          if (isReg) return 1;
+          if (m.isAfterparty) return 2;
+          return 3;
+        };
+        const diff = rank(a, regularSet) - rank(b, regularSet);
+        if (diff !== 0) return diff;
+        return a.nickname.localeCompare(b.nickname, "ko");
+      });
       sortedIdsRef.current = sorted.map((m) => m.id);
       setMembers(list);
       const state: Record<string, boolean> = {};
@@ -119,6 +137,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
 
     // 구글 시트에 비동기 동기화 (실패해도 저장은 완료)
     syncToSheets();
+    // 준회원 출석부 조용히 동기화 (UI 상태 변경 없음)
+    fetch(`/api/meetings/${id}/sync-associate-attendance`, { method: "POST" }).catch(() => null);
   };
 
   const syncToSheets = async () => {
@@ -133,6 +153,7 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       setSheetSyncing(false);
     }
   };
+
 
   const addMember = async () => {
     if (!newNickname.trim()) return;
@@ -173,7 +194,18 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
           const state: Record<string, boolean> = {};
           list.forEach((m) => { state[m.id] = m.checkedIn; });
           setSavedState(state);
-          sortedIdsRef.current = [...list].sort((a, b) => a.nickname.localeCompare(b.nickname, "ko")).map((m) => m.id);
+          sortedIdsRef.current = [...list].sort((a, b) => {
+              const rankFn = (m: AttendanceMember) => {
+                const isReg = regularNicknames.has(m.nickname.trim());
+                if (isReg && m.isAfterparty) return 0;
+                if (isReg) return 1;
+                if (m.isAfterparty) return 2;
+                return 3;
+              };
+              const diff = rankFn(a) - rankFn(b);
+              if (diff !== 0) return diff;
+              return a.nickname.localeCompare(b.nickname, "ko");
+            }).map((m) => m.id);
         }
         setImportResult(updated > 0 ? `뒤풀이 ${updated}명 수정됨` : "이미 최신 상태입니다.");
       } else {
@@ -263,14 +295,52 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
           list.forEach((m) => { state[m.id] = m.checkedIn; });
           setSavedState(state);
           sortedIdsRef.current = [...list]
-            .sort((a, b) => a.nickname.localeCompare(b.nickname, "ko"))
+            .sort((a, b) => {
+              const rankFn = (m: AttendanceMember) => {
+                const isReg = regularNicknames.has(m.nickname.trim());
+                if (isReg && m.isAfterparty) return 0;
+                if (isReg) return 1;
+                if (m.isAfterparty) return 2;
+                return 3;
+              };
+              const diff = rankFn(a) - rankFn(b);
+              if (diff !== 0) return diff;
+              return a.nickname.localeCompare(b.nickname, "ko");
+            })
             .map((m) => m.id);
         }
       }
 
-      setImportResult(
-        added.length > 0 ? `${added.length}명 추가 · 뒤풀이 동기화 완료` : "뒤풀이 동기화 완료"
-      );
+      // 정회원이 아닌 신규 닉네임 → 준회원 자동 추가
+      const nonRegularNicknames = responses
+        .map((r) => r.nickname.trim())
+        .filter((nick) => nick && !regularNicknames.has(nick));
+
+      let assocAddedCount = 0;
+      if (nonRegularNicknames.length > 0) {
+        const assocRes = await fetch("/api/associate-members");
+        if (assocRes.ok) {
+          const existingAssoc: { nickname: string }[] = await assocRes.json();
+          const existingAssocNicknames = new Set(existingAssoc.map((m) => m.nickname.trim()));
+          const toAdd = nonRegularNicknames.filter((nick) => !existingAssocNicknames.has(nick));
+          await Promise.all(
+            toAdd.map((nick) =>
+              fetch("/api/associate-members", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ nickname: nick }),
+              })
+            )
+          );
+          assocAddedCount = toAdd.length;
+        }
+      }
+
+      const parts: string[] = [];
+      if (added.length > 0) parts.push(`${added.length}명 추가`);
+      if (assocAddedCount > 0) parts.push(`준회원 ${assocAddedCount}명 자동 등록`);
+      parts.push("뒤풀이 동기화 완료");
+      setImportResult(parts.join(" · "));
     } finally {
       setImporting(false);
     }
@@ -292,7 +362,12 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
   const pendingCount = Object.keys(pendingChanges).length;
   const checkedCount = members.filter((m) => m.checkedIn).length;
   const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
-  const sortedMembers = sortedIdsRef.current.map((id) => memberMap[id]).filter(Boolean);
+  const allSorted = sortedIdsRef.current.map((id) => memberMap[id]).filter(Boolean);
+  const sortedMembers = allSorted.filter((m) => {
+    if (filter === "regular") return regularNicknames.has(m.nickname.trim());
+    if (filter === "afterparty") return m.isAfterparty;
+    return true;
+  });
 
   if (loading) {
     return (
@@ -308,7 +383,7 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
     <div className="py-6 space-y-4 pb-32">
       {/* 헤더 */}
       <div>
-        <button onClick={() => router.back()} className="text-sm text-muted-foreground mb-2">
+        <button onClick={() => router.back()} className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full bg-violet-100 text-violet-700 hover:bg-violet-200 active:scale-95 transition-all mb-3">
           ← 뒤로
         </button>
         <h1 className="text-xl font-bold">출석 체크</h1>
@@ -320,32 +395,52 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* 현황 요약 */}
-      <Card className="bg-violet-50 border-violet-400">
-        <CardContent className="p-4 flex items-center justify-between">
-          <div>
-            <p className="text-4xl font-bold text-black">{checkedCount}</p>
-            <p className="text-sm text-black/60">출석 / 전체 {members.length}명</p>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-semibold text-black">{members.length - checkedCount}명</p>
-            <p className="text-sm text-black/60">미체크</p>
-          </div>
-        </CardContent>
-      </Card>
+      {(() => {
+        const regularCheckedCount = members.filter(
+          (m) => m.checkedIn && regularNicknames.has(m.nickname.trim())
+        ).length;
+        return (
+          <Card className="bg-violet-50 border-violet-400">
+            <CardContent className="p-4 flex items-center justify-between">
+              <div>
+                <p className="text-4xl font-bold text-black">{checkedCount}</p>
+                <p className="text-sm text-black/60">출석 / 전체 {members.length}명</p>
+                {regularNicknames.size > 0 && (
+                  <p className="text-xs text-primary/70 mt-1">정회원 출석 {regularCheckedCount}명</p>
+                )}
+              </div>
+              <div className="text-right">
+                <p className="text-2xl font-semibold text-black">{members.length - checkedCount}명</p>
+                <p className="text-sm text-black/60">미체크</p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* 구글 시트 동기화 */}
       <Card>
         <CardContent className="p-4 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">구글 시트 출석부</p>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold">정회원 출석부 시트</p>
+              <a
+                href="https://docs.google.com/spreadsheets/d/1e2NtAQaTvqSAqnWHPYAqBVFRSnsbU0Jm7b9U9ZB7KXg/edit"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-primary/60 hover:text-primary underline underline-offset-2 transition-colors"
+              >
+                바로가기 →
+              </a>
+            </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               {sheetSyncing
                 ? "시트에 반영 중..."
                 : sheetSyncResult === "ok"
-                  ? "시트 반영 완료"
+                  ? "시트 반영 완료 (정회원만)"
                   : sheetSyncResult === "error"
                     ? "시트 반영 실패 — 다시 시도"
-                    : "출석 저장 시 자동으로 시트에 반영됩니다"}
+                    : "저장 시 정회원만 자동으로 시트에 반영됩니다"}
             </p>
           </div>
           <Button
@@ -363,10 +458,22 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       {/* 구글폼 */}
       <Card>
         <CardContent className="p-4 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">
-              {meeting?.formUrl ? "구글폼 신청자 불러오기" : "구글폼 없음"}
-            </p>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold">
+                {meeting?.formUrl ? "구글폼 신청자 불러오기" : "구글폼 없음"}
+              </p>
+              {meeting?.formUrl && (
+                <a
+                  href={meeting.formUrl.replace("/viewform", "/edit")}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary/60 hover:text-primary underline underline-offset-2 transition-colors"
+                >
+                  바로가기 →
+                </a>
+              )}
+            </div>
             {importResult && (
               <p className="text-xs text-muted-foreground mt-0.5">{importResult}</p>
             )}
@@ -414,16 +521,50 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
         </CardContent>
       </Card>
 
+      {/* 필터 버튼 */}
+      {allSorted.length > 0 && (
+        <div className="flex gap-2">
+          {(["all", "regular", "afterparty"] as const).map((f) => {
+            const label = f === "all" ? `전체 ${allSorted.length}` : f === "regular" ? `정회원 ${allSorted.filter((m) => regularNicknames.has(m.nickname.trim())).length}` : `뒤풀이 ${allSorted.filter((m) => m.isAfterparty).length}`;
+            const active = filter === f;
+            return (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  active
+                    ? f === "regular"
+                      ? "bg-violet-700 text-white shadow-sm"
+                      : f === "afterparty"
+                        ? "bg-amber-500 text-white shadow-sm"
+                        : "bg-violet-200 text-violet-900 shadow-sm"
+                    : "bg-gray-200 text-gray-500 hover:bg-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* 출석 목록 */}
       <div className="space-y-2">
         {sortedMembers.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            <p>명단이 없습니다.</p>
-            <p className="mt-1">구글폼 신청자를 불러오거나 직접 추가하세요.</p>
+            {filter !== "all" ? (
+              <p>해당 필터에 맞는 명단이 없습니다.</p>
+            ) : (
+              <>
+                <p>명단이 없습니다.</p>
+                <p className="mt-1">구글폼 신청자를 불러오거나 직접 추가하세요.</p>
+              </>
+            )}
           </div>
         ) : (
           sortedMembers.map((member) => {
             const isPending = member.id in pendingChanges;
+            const isRegular = regularNicknames.has(member.nickname.trim());
             return (
               <div key={member.id} className="relative group">
                 <button
@@ -437,12 +578,19 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
                         : "border-violet-300 bg-violet-50/80 hover:bg-violet-100/60",
                   ].join(" ")}
                 >
-                  <div>
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-semibold text-base">{member.nickname}</p>
+                    {isRegular && (
+                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-primary text-white leading-none">
+                        정회원
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {member.isAfterparty && (
-                      <Badge variant="outline" className="text-xs">뒤풀이</Badge>
+                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-amber-400 text-white leading-none">
+                        뒤풀이
+                      </span>
                     )}
                     <span className="text-2xl transition-all">
                       {member.checkedIn ? "✅" : "☐"}

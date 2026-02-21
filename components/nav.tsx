@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/dashboard",    label: "홈",   icon: "🏠" },
   { href: "/meetings",     label: "모임",  icon: "📅" },
-  { href: "/finance/dues", label: "회비",  icon: "💰" },
+  { href: "/finance/afterparty", label: "뒤풀이", icon: "🍻" },
   { href: "/announcements",label: "공지",  icon: "📢" },
   { href: "/members/regular", label: "회원",  icon: "👥" },
   { href: "/logs",         label: "이력",  icon: "📋" },

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { auth } from "@/lib/auth";
-import { syncAttendanceToSheet } from "@/lib/google-sheets";
+import { syncMeetingAttendanceToSheet } from "@/lib/google-sheets";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +14,10 @@ export async function POST(
 
   const { id } = await params;
 
-  const [meetingDoc, attendanceSnapshot] = await Promise.all([
+  const [meetingDoc, attendanceSnapshot, regularMembersSnapshot] = await Promise.all([
     adminDb.collection("meetings").doc(id).get(),
     adminDb.collection("attendances").doc(id).collection("members").get(),
+    adminDb.collection("regularMembers").get(),
   ]);
 
   if (!meetingDoc.exists) {
@@ -24,19 +25,29 @@ export async function POST(
   }
 
   const meeting = meetingDoc.data() as { date: string; title: string };
-  const members = attendanceSnapshot.docs.map((doc) => {
+
+  // 정회원 닉네임 Set
+  const regularNicknames = new Set(
+    regularMembersSnapshot.docs.map((d) => (d.data().nickname as string ?? "").trim())
+  );
+
+  // 출석 체크된 정회원 닉네임만 필터
+  const attendedRegularNicknames = new Set<string>();
+  for (const doc of attendanceSnapshot.docs) {
     const data = doc.data();
-    return {
-      nickname: data.nickname as string,
-      checkedIn: data.checkedIn as boolean,
-      checkedInAt: data.checkedInAt as string | null | undefined,
-      isAfterparty: data.isAfterparty as boolean,
-    };
-  });
+    const nickname = (data.nickname as string ?? "").trim();
+    if (data.checkedIn && regularNicknames.has(nickname)) {
+      attendedRegularNicknames.add(nickname);
+    }
+  }
 
   try {
-    await syncAttendanceToSheet(meeting.date, meeting.title, members);
-    return NextResponse.json({ success: true, synced: members.length });
+    await syncMeetingAttendanceToSheet(meeting.date, attendedRegularNicknames);
+    return NextResponse.json({
+      success: true,
+      synced: attendedRegularNicknames.size,
+      totalAttendees: attendanceSnapshot.size,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[sync-sheets]", message);

@@ -73,10 +73,30 @@ export default async function DashboardPage() {
   return (
     <div className="py-6 space-y-5">
       {/* 환영 헤더 */}
-      <div>
-        <h1 className="text-xl font-bold">안녕하세요, {session?.user?.name?.split(" ")[0]}님 👋</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">{year}년 {quarter}분기 운영 현황</p>
-      </div>
+      {(() => {
+        const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
+        const todayLabel = `${now.getMonth() + 1}/${now.getDate()}(${weekdays[now.getDay()]})`;
+        const nextMeeting = timeline.next;
+        let dday: string | null = null;
+        if (nextMeeting) {
+          const diff = Math.ceil((new Date(nextMeeting.date).getTime() - new Date(now.toISOString().slice(0, 10)).getTime()) / 86400000);
+          dday = diff === 0 ? "D-Day" : `D-${diff}`;
+        }
+        return (
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h1 className="text-xl font-bold">안녕하세요, {session?.user?.name?.split(" ")[0]}님 👋</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">{year}년 {quarter}분기 운영 현황</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-2xl font-bold tabular-nums leading-none">{todayLabel}</p>
+              {dday && (
+                <p className="text-sm font-bold text-primary mt-0.5">{dday}</p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 모임 타임라인 */}
       <div>
@@ -155,10 +175,15 @@ export default async function DashboardPage() {
                             </div>
                           </>
                         ) : (
-                          <div className="mt-2">
+                          <div className="flex gap-2 mt-2">
                             <Button asChild variant="outline" size="sm" className="h-7 text-xs">
                               <Link href={`/meetings/${meeting.id}/presenter`}>수정</Link>
                             </Button>
+                            {type === "upcoming" && (
+                              <Button asChild variant="outline" size="sm" className="h-7 text-xs">
+                                <Link href={`/announcements?meetingId=${meeting.id}`}>공지</Link>
+                              </Button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -190,7 +215,7 @@ export default async function DashboardPage() {
               )}
             </div>
             <Button asChild variant="outline" size="sm">
-              <Link href="/finance/dues">관리</Link>
+              <Link href="/members/dues">관리</Link>
             </Button>
           </div>
         </CardContent>

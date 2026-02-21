@@ -219,6 +219,137 @@ export async function syncRegularMembersToSheet(
   return result;
 }
 
+/**
+ * 특정 모임의 출석 결과를 정회원 출석부 시트의 해당 날짜 열에만 동기화합니다.
+ * 정회원 닉네임 목록에 있는 행만 업데이트합니다.
+ */
+export async function syncMeetingAttendanceToSheet(
+  meetingDate: string, // "2026-02-21"
+  attendedNicknames: Set<string>, // 정회원 중 출석한 닉네임
+): Promise<void> {
+  const spreadsheetId = getSpreadsheetId();
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+
+  const spreadsheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+  const firstSheetName = spreadsheetMeta.data.sheets?.[0]?.properties?.title ?? "Sheet1";
+
+  const readRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: firstSheetName,
+  });
+  const allRows = (readRes.data.values ?? []) as string[][];
+
+  // 헤더 행("닉네임" 셀 포함) 찾기
+  let headerRowIndex = -1;
+  for (let i = 0; i < allRows.length; i++) {
+    if (allRows[i].some((cell) => String(cell ?? "").trim() === "닉네임")) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+  if (headerRowIndex === -1) throw new Error("시트에서 '닉네임' 헤더를 찾을 수 없습니다.");
+
+  const headerRow = allRows[headerRowIndex].map((c) => String(c ?? "").trim());
+  const nicknameColIndex = headerRow.findIndex((h) => h === "닉네임");
+
+  // 날짜 열 탐색
+  const variants = dateHeaderVariants(meetingDate);
+  const dateColIndex = headerRow.findIndex((h) => variants.includes(h));
+  if (dateColIndex === -1) throw new Error(`시트에서 날짜 열을 찾을 수 없습니다: ${meetingDate}`);
+
+  // 정회원 행별 업데이트 구성
+  const dataStartRow = headerRowIndex + 2; // 헤더 + 책/행사명 행 건너뜀
+  const updateData: { range: string; values: string[][] }[] = [];
+
+  for (let i = dataStartRow; i < allRows.length; i++) {
+    const nickname = String(allRows[i]?.[nicknameColIndex] ?? "").trim();
+    if (!nickname) continue;
+    const sheetRow = i + 1;
+    updateData.push({
+      range: `${firstSheetName}!${indexToColumn(dateColIndex)}${sheetRow}`,
+      values: [[attendedNicknames.has(nickname) ? "참" : ""]],
+    });
+  }
+
+  if (updateData.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: { valueInputOption: "USER_ENTERED", data: updateData },
+    });
+  }
+}
+
+export interface AssociateMemberForSheet {
+  nickname: string;
+  attendance: Record<string, boolean>;
+}
+
+/**
+ * 준회원 출석부를 스프레드시트의 "준회원 출석부" 탭에 전체 덮어쓰기 방식으로 동기화합니다.
+ */
+export async function syncAssociateMembersToSheet(
+  members: AssociateMemberForSheet[],
+  meetings: Array<{ id: string; date: string }>,
+): Promise<void> {
+  const spreadsheetId = getSpreadsheetId();
+  const auth = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+
+  const SHEET_NAME = "준회원 출석부";
+
+  // 시트 존재 여부 확인 후 없으면 생성
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const existingSheet = meta.data.sheets?.find(
+    (s) => s.properties?.title === SHEET_NAME,
+  );
+  if (!existingSheet) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: SHEET_NAME } } }],
+      },
+    });
+  }
+
+  // 2026년 모임만 날짜순 정렬
+  const filteredMeetings = meetings
+    .filter((m) => m.date.startsWith("2026-"))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // 헤더: 닉네임 | 1월 17일 | 2월 7일 | ...
+  const headerRow = [
+    "닉네임",
+    ...filteredMeetings.map((m) => {
+      const d = new Date(m.date);
+      return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+    }),
+  ];
+
+  const dataRows = members.map((m) => [
+    m.nickname,
+    ...filteredMeetings.map((meeting) =>
+      m.attendance?.[meeting.id] ? "참" : "",
+    ),
+  ]);
+
+  const rows = [headerRow, ...dataRows];
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${SHEET_NAME}!A:Z`,
+  });
+
+  if (rows.length > 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${SHEET_NAME}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: rows },
+    });
+  }
+}
+
 function getAuth() {
   return new google.auth.GoogleAuth({
     credentials: {

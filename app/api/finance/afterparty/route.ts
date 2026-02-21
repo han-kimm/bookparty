@@ -11,10 +11,30 @@ export async function GET(req: NextRequest) {
   const meetingId = req.nextUrl.searchParams.get("meetingId");
   if (!meetingId) return NextResponse.json({ error: "meetingId 필수" }, { status: 400 });
 
-  const doc = await adminDb.collection("finance").doc(meetingId).collection("afterparty").doc("main").get();
-  if (!doc.exists) return NextResponse.json(null);
+  const roundParam = req.nextUrl.searchParams.get("round") ?? "1";
+  const docId = `round_${roundParam}`;
 
-  return NextResponse.json(doc.data());
+  const doc = await adminDb
+    .collection("finance")
+    .doc(meetingId)
+    .collection("afterparty")
+    .doc(docId)
+    .get();
+
+  if (doc.exists) return NextResponse.json(doc.data());
+
+  // round_1 없을 때 기존 'main' 문서로 fallback (마이그레이션)
+  if (roundParam === "1") {
+    const mainDoc = await adminDb
+      .collection("finance")
+      .doc(meetingId)
+      .collection("afterparty")
+      .doc("main")
+      .get();
+    if (mainDoc.exists) return NextResponse.json(mainDoc.data());
+  }
+
+  return NextResponse.json(null);
 }
 
 export async function POST(req: NextRequest) {
@@ -22,19 +42,27 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { meetingId, totalAmount, participants, notes } = body;
+  const { meetingId, round = 1, totalAmount, participants, notes } = body;
   if (!meetingId) return NextResponse.json({ error: "meetingId 필수" }, { status: 400 });
 
-  const perPerson = participants?.length > 0 ? Math.ceil(totalAmount / participants.length) : 0;
+  const docId = `round_${round}`;
+  const perPerson =
+    participants?.length > 0 ? Math.ceil(totalAmount / participants.length) : 0;
 
-  await adminDb.collection("finance").doc(meetingId).collection("afterparty").doc("main").set({
-    meetingId,
-    totalAmount: totalAmount || 0,
-    participants: participants || [],
-    notes: notes || "",
-    perPerson,
-    updatedAt: new Date().toISOString(),
-  });
+  await adminDb
+    .collection("finance")
+    .doc(meetingId)
+    .collection("afterparty")
+    .doc(docId)
+    .set({
+      meetingId,
+      round,
+      totalAmount: totalAmount || 0,
+      participants: participants || [],
+      notes: notes || "",
+      perPerson,
+      updatedAt: new Date().toISOString(),
+    });
 
   return NextResponse.json({ success: true, perPerson });
 }

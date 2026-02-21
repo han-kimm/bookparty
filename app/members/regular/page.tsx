@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 interface RegularMember {
@@ -215,16 +214,13 @@ export default function RegularMembersPage() {
           >
             {sheetSyncing ? "동기화 중..." : "시트 동기화"}
           </button>
-          <Link href="/members" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            회원 목록 →
-          </Link>
         </div>
       </div>
       {sheetSyncMsg && (
         <p className="text-xs text-center text-muted-foreground mb-2">{sheetSyncMsg}</p>
       )}
       <div className="text-xs text-muted-foreground bg-muted/60 rounded-xl px-4 py-3 mb-4 space-y-1">
-        <p>· 셀을 탭하면 출석(참) / 미출석으로 토글됩니다.</p>
+        <p>· 출석은 각 모임 출석체크에서 자동으로 반영됩니다.</p>
         <p>· 회비 셀은 탭할 때마다 납부(O) → 미납(X) → 미설정 순으로 변경됩니다.</p>
         <p>· 변경 후 우측 하단 <strong>저장</strong> 버튼을 눌러야 반영됩니다.</p>
       </div>
@@ -303,15 +299,10 @@ export default function RegularMembersPage() {
                   const isLast = i === columns.length - 1;
                   if (col.type === "meeting") {
                     const attended = member.attendance?.[col.meeting.id] ?? false;
-                    const fieldPath = `attendance.${col.meeting.id}`;
-                    const isPendingCell = pendingChanges[member.id]?.[fieldPath] !== undefined;
                     return (
-                      <button
+                      <div
                         key={col.meeting.id}
-                        onClick={() => toggle(member.id, fieldPath, attended)}
-                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 transition-all active:scale-95 ${
-                          isPendingCell ? "bg-amber-50/50" : attended ? "bg-green-50/40" : "hover:bg-violet-100/40"
-                        }`}
+                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 ${attended ? "bg-green-50/40" : ""}`}
                         style={{ minHeight: 44 }}
                       >
                         {attended ? (
@@ -319,7 +310,7 @@ export default function RegularMembersPage() {
                         ) : (
                           <span className="text-muted-foreground/25 text-base">·</span>
                         )}
-                      </button>
+                      </div>
                     );
                   } else {
                     const paid = member.dues?.[col.quarter.key];

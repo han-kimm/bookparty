@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { auth } from "@/lib/auth";
-import { syncRegularMembersToSheet } from "@/lib/google-sheets";
+import { syncAssociateMembersToSheet } from "@/lib/google-sheets";
 
 export const dynamic = "force-dynamic";
 
@@ -10,13 +10,13 @@ export async function POST() {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const [membersSnap, meetingsSnap] = await Promise.all([
-    adminDb.collection("regularMembers").orderBy("order").get(),
-    adminDb.collection("meetings").get(),
+    adminDb.collection("associateMembers").orderBy("order", "asc").get(),
+    adminDb.collection("meetings").orderBy("date", "asc").get(),
   ]);
 
-  const meetings = meetingsSnap.docs.map((doc) => ({
-    id: doc.id,
-    date: doc.data().date as string,
+  const meetings = meetingsSnap.docs.map((d) => ({
+    id: d.id,
+    date: (d.data().date as string) ?? "",
   }));
 
   const meetingIds = meetings.map((m) => m.id);
@@ -41,31 +41,17 @@ export async function POST() {
     });
   });
 
-  const members = membersSnap.docs.map((doc) => {
-    const data = doc.data();
-    const nickname = (data.nickname as string)?.trim();
+  const members = membersSnap.docs.map((d) => {
+    const nickname = ((d.data().nickname as string) ?? "").trim();
     const attendedMeetings = nicknameAttendance.get(nickname) ?? new Set<string>();
     const attendance: Record<string, boolean> = {};
     meetingIds.forEach((meetingId) => {
       if (attendedMeetings.has(meetingId)) attendance[meetingId] = true;
     });
-    return {
-      nickname,
-      attendance,
-      dues: (data.dues ?? {}) as Record<string, boolean | undefined>,
-    };
+    return { nickname, attendance };
   });
 
-  try {
-    const votingStatus = await syncRegularMembersToSheet(members, meetings);
-    return NextResponse.json({
-      success: true,
-      synced: members.length,
-      votingStatus: Object.fromEntries(votingStatus),
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[regular-members/sync-sheets]", message);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  await syncAssociateMembersToSheet(members, meetings);
+
+  return NextResponse.json({ ok: true });
 }

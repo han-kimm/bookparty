@@ -75,8 +75,15 @@ export default function PresenterPage({ params }: { params: Promise<{ id: string
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
     });
+    const data = await res.json().catch(() => ({}));
     setSaving(false);
-    setSaveResult(res.ok ? "ok" : "error");
+    if (!res.ok) {
+      setSaveResult("error");
+    } else if (data.formSyncError) {
+      setSaveResult(data.formSyncError);
+    } else {
+      setSaveResult("ok");
+    }
   };
 
   const handleDelete = async () => {
@@ -312,6 +319,9 @@ export default function PresenterPage({ params }: { params: Promise<{ id: string
           )}
           {saveResult === "error" && (
             <p className="text-sm text-center text-destructive">저장에 실패했습니다.</p>
+          )}
+          {saveResult && saveResult !== "ok" && saveResult !== "error" && (
+            <p className="text-sm text-center text-amber-600">저장됨 · ⚠️ {saveResult}</p>
           )}
 
           <AlertDialog>
