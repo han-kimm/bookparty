@@ -156,9 +156,9 @@ export default function MembersPage() {
         </div>
 
         {loading ? (
-          <div className="space-y-2">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-14 rounded-xl bg-gray-200 animate-pulse" />
+          <div className="grid grid-cols-3 gap-2">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="h-16 rounded-xl bg-gray-200 animate-pulse" />
             ))}
           </div>
         ) : filtered.length === 0 ? (
@@ -166,15 +166,12 @@ export default function MembersPage() {
             {search ? "검색 결과가 없습니다." : "등록된 정회원이 없습니다."}
           </div>
         ) : (
-          <div className="grid gap-2 lg:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2">
             {filtered.map((member) => (
               <Card key={member.id} className="cursor-pointer" onClick={() => openEdit(member)}>
-                <CardContent className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-primary text-white leading-none">정회원</span>
-                    <p className="font-semibold">{member.nickname}</p>
-                  </div>
-                  <span className="text-sm text-muted-foreground">수정 →</span>
+                <CardContent className="px-3 py-2 flex flex-col gap-1">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-primary text-white leading-none w-fit">정회원</span>
+                  <p className="font-semibold text-sm truncate">{member.nickname}</p>
                 </CardContent>
               </Card>
             ))}
@@ -190,9 +187,9 @@ export default function MembersPage() {
         </div>
 
         {loading ? (
-          <div className="space-y-2">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-14 rounded-xl bg-gray-200 animate-pulse" />
+          <div className="grid grid-cols-3 gap-2">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="h-16 rounded-xl bg-gray-200 animate-pulse" />
             ))}
           </div>
         ) : filteredAssoc.length === 0 ? (
@@ -200,20 +197,20 @@ export default function MembersPage() {
             {search ? "검색 결과가 없습니다." : "등록된 준회원이 없습니다."}
           </div>
         ) : (
-          <div className="grid gap-2 lg:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2">
             {filteredAssoc.map((member) => (
               <Card key={member.id}>
-                <CardContent className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground leading-none">준회원</span>
-                    <p className="font-semibold">{member.nickname}</p>
+                <CardContent className="px-3 py-2 flex flex-col gap-1">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground leading-none w-fit">준회원</span>
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-sm truncate">{member.nickname}</p>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setAssocDeleteTarget(member); }}
+                      className="text-xs text-muted-foreground/50 hover:text-destructive transition-colors flex-shrink-0 ml-1"
+                    >
+                      ✕
+                    </button>
                   </div>
-                  <button
-                    onClick={() => setAssocDeleteTarget(member)}
-                    className="text-sm text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    삭제
-                  </button>
                 </CardContent>
               </Card>
             ))}

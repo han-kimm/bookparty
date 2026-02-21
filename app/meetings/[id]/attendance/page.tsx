@@ -41,12 +41,13 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
   const [creatingForm, setCreatingForm] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const sortedIdsRef = useRef<string[]>([]); // 초기 로드 시 정렬 순서 고정
+  const addingRef = useRef(false); // 중복 추가 방지
   const [importResult, setImportResult] = useState<string | null>(null);
 
-  // 저장 전 변경사항: memberId -> 변경된 checkedIn 값
-  const [pendingChanges, setPendingChanges] = useState<Record<string, boolean>>({});
-  // 마지막으로 저장된 상태 (변경 감지용)
-  const [savedState, setSavedState] = useState<Record<string, boolean>>({});
+  // 저장 전 변경사항: memberId -> {checkedIn?, isAfterparty?}
+  const [pendingChanges, setPendingChanges] = useState<Record<string, Partial<{checkedIn: boolean; isAfterparty: boolean}>>>({});
+  // 마지막으로 저장된 상태
+  const [savedState, setSavedState] = useState<Record<string, {checkedIn: boolean; isAfterparty: boolean}>>({});
 
   useEffect(() => {
     Promise.all([
@@ -74,43 +75,48 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       });
       sortedIdsRef.current = sorted.map((m) => m.id);
       setMembers(list);
-      const state: Record<string, boolean> = {};
-      list.forEach((m) => { state[m.id] = m.checkedIn; });
+      const state: Record<string, {checkedIn: boolean; isAfterparty: boolean}> = {};
+      list.forEach((m) => { state[m.id] = { checkedIn: m.checkedIn, isAfterparty: m.isAfterparty }; });
       setSavedState(state);
       setLoading(false);
     });
   }, [id]);
 
-  const toggleCheckin = (member: AttendanceMember) => {
-    const newValue = !member.checkedIn;
-
-    // 로컬 표시 업데이트
+  const toggleField = (member: AttendanceMember, field: "checkedIn" | "isAfterparty") => {
+    const newValue = !member[field];
     setMembers((list) =>
-      list.map((m) => m.id === member.id ? { ...m, checkedIn: newValue } : m)
+      list.map((m) => m.id === member.id ? { ...m, [field]: newValue } : m)
     );
-
-    // 원래 저장 상태와 같으면 pendingChanges에서 제거, 다르면 추가
     setPendingChanges((prev) => {
+      const memberPending = { ...(prev[member.id] ?? {}) };
+      if (savedState[member.id]?.[field] === newValue) {
+        delete memberPending[field];
+      } else {
+        memberPending[field] = newValue;
+      }
       const next = { ...prev };
-      if (savedState[member.id] === newValue) {
+      if (Object.keys(memberPending).length === 0) {
         delete next[member.id];
       } else {
-        next[member.id] = newValue;
+        next[member.id] = memberPending;
       }
       return next;
     });
   };
+
+  const toggleCheckin = (member: AttendanceMember) => toggleField(member, "checkedIn");
+  const toggleAfterparty = (member: AttendanceMember) => toggleField(member, "isAfterparty");
 
   const saveAll = async () => {
     if (Object.keys(pendingChanges).length === 0) return;
     setSaving(true);
 
     await Promise.all(
-      Object.entries(pendingChanges).map(([memberId, checkedIn]) =>
+      Object.entries(pendingChanges).map(([memberId, changes]) =>
         fetch(`/api/meetings/${id}/attendance`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ memberId, checkedIn }),
+          body: JSON.stringify({ memberId, ...changes }),
         })
       )
     );
@@ -123,15 +129,27 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       body: JSON.stringify({
         type: "출석",
         context: `${meeting?.title ?? ""} (${meeting?.date ?? ""})`,
-        entries: Object.entries(pendingChanges).map(([memberId, to]) => ({
-          target: memberMap[memberId] ?? memberId,
-          from: savedState[memberId] ? "출석" : "미출석",
-          to: to ? "출석" : "미출석",
-        })),
+        entries: Object.entries(pendingChanges).flatMap(([memberId, changes]) =>
+          Object.entries(changes).map(([field, to]) => ({
+            target: memberMap[memberId] ?? memberId,
+            from: field === "checkedIn"
+              ? (savedState[memberId]?.checkedIn ? "출석" : "미출석")
+              : (savedState[memberId]?.isAfterparty ? "뒤풀이 참" : "뒤풀이 불참"),
+            to: field === "checkedIn"
+              ? (to ? "출석" : "미출석")
+              : (to ? "뒤풀이 참" : "뒤풀이 불참"),
+          }))
+        ),
       }),
     });
 
-    setSavedState((prev) => ({ ...prev, ...pendingChanges }));
+    setSavedState((prev) => {
+      const next = { ...prev };
+      Object.entries(pendingChanges).forEach(([memberId, changes]) => {
+        next[memberId] = { ...next[memberId], ...changes } as {checkedIn: boolean; isAfterparty: boolean};
+      });
+      return next;
+    });
     setPendingChanges({});
     setSaving(false);
 
@@ -156,7 +174,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
 
 
   const addMember = async () => {
-    if (!newNickname.trim()) return;
+    if (!newNickname.trim() || addingRef.current) return;
+    addingRef.current = true;
     setAdding(true);
     const res = await fetch(`/api/meetings/${id}/attendance`, {
       method: "POST",
@@ -173,9 +192,10 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
       };
       sortedIdsRef.current = [...sortedIdsRef.current, newId];
       setMembers((list) => [...list, newMember]);
-      setSavedState((prev) => ({ ...prev, [newId]: false }));
+      setSavedState((prev) => ({ ...prev, [newId]: { checkedIn: false, isAfterparty: false } }));
       setNewNickname("");
     }
+    addingRef.current = false;
     setAdding(false);
   };
 
@@ -191,8 +211,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
         if (membersRes.ok) {
           const list: AttendanceMember[] = await membersRes.json();
           setMembers(list);
-          const state: Record<string, boolean> = {};
-          list.forEach((m) => { state[m.id] = m.checkedIn; });
+          const state: Record<string, {checkedIn: boolean; isAfterparty: boolean}> = {};
+          list.forEach((m) => { state[m.id] = { checkedIn: m.checkedIn, isAfterparty: m.isAfterparty }; });
           setSavedState(state);
           sortedIdsRef.current = [...list].sort((a, b) => {
               const rankFn = (m: AttendanceMember) => {
@@ -279,7 +299,7 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
         setMembers((list) => [...list, ...added]);
         setSavedState((prev) => {
           const next = { ...prev };
-          added.forEach((m) => { next[m.id] = false; });
+          added.forEach((m) => { next[m.id] = { checkedIn: false, isAfterparty: m.isAfterparty }; });
           return next;
         });
       }
@@ -291,8 +311,8 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
         if (membersRes.ok) {
           const list: AttendanceMember[] = await membersRes.json();
           setMembers(list);
-          const state: Record<string, boolean> = {};
-          list.forEach((m) => { state[m.id] = m.checkedIn; });
+          const state: Record<string, {checkedIn: boolean; isAfterparty: boolean}> = {};
+          list.forEach((m) => { state[m.id] = { checkedIn: m.checkedIn, isAfterparty: m.isAfterparty }; });
           setSavedState(state);
           sortedIdsRef.current = [...list]
             .sort((a, b) => {
@@ -418,43 +438,6 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
         );
       })()}
 
-      {/* 구글 시트 동기화 */}
-      <Card>
-        <CardContent className="p-4 flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-semibold">정회원 출석부 시트</p>
-              <a
-                href="https://docs.google.com/spreadsheets/d/1e2NtAQaTvqSAqnWHPYAqBVFRSnsbU0Jm7b9U9ZB7KXg/edit"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-primary/60 hover:text-primary underline underline-offset-2 transition-colors"
-              >
-                바로가기 →
-              </a>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {sheetSyncing
-                ? "시트에 반영 중..."
-                : sheetSyncResult === "ok"
-                  ? "시트 반영 완료 (정회원만)"
-                  : sheetSyncResult === "error"
-                    ? "시트 반영 실패 — 다시 시도"
-                    : "저장 시 정회원만 자동으로 시트에 반영됩니다"}
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={syncToSheets}
-            disabled={sheetSyncing || members.length === 0}
-            className="shrink-0"
-          >
-            {sheetSyncing ? "동기화 중..." : "지금 동기화"}
-          </Button>
-        </CardContent>
-      </Card>
-
       {/* 구글폼 */}
       <Card>
         <CardContent className="p-4 flex items-center justify-between gap-3">
@@ -512,7 +495,7 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
             placeholder="닉네임 입력"
             value={newNickname}
             onChange={(e) => setNewNickname(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addMember()}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMember(); } }}
             className="border-2 border-violet-300 focus-visible:border-primary/50"
           />
           <Button onClick={addMember} disabled={adding || !newNickname.trim()} variant="default">
@@ -565,41 +548,66 @@ export default function AttendancePage({ params }: { params: Promise<{ id: strin
           sortedMembers.map((member) => {
             const isPending = member.id in pendingChanges;
             const isRegular = regularNicknames.has(member.nickname.trim());
+            const isPendingCheckin = pendingChanges[member.id]?.checkedIn !== undefined;
+            const isPendingAfterparty = pendingChanges[member.id]?.isAfterparty !== undefined;
             return (
-              <div key={member.id} className="relative group">
+              <div
+                key={member.id}
+                className={[
+                  "flex items-center gap-2 px-4 py-3 rounded-2xl border-2 transition-all",
+                  isPending
+                    ? "border-amber-400 bg-amber-50/60"
+                    : member.checkedIn
+                      ? "border-green-500 bg-green-50/80"
+                      : "border-violet-300 bg-violet-50/80",
+                ].join(" ")}
+              >
+                {/* 닉네임 + 뱃지 */}
+                <div className="flex-1 flex items-center gap-2 flex-wrap min-w-0">
+                  <p className="font-semibold text-base truncate">{member.nickname}</p>
+                  {isRegular && (
+                    <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-primary text-white leading-none shrink-0">
+                      정회원
+                    </span>
+                  )}
+                </div>
+
+                {/* 뒤풀이 토글 */}
+                <button
+                  onClick={() => toggleAfterparty(member)}
+                  className={[
+                    "flex flex-col items-center gap-0.5 px-2.5 py-1.5 rounded-xl border transition-all active:scale-95 shrink-0",
+                    isPendingAfterparty
+                      ? "border-amber-400 bg-amber-50"
+                      : member.isAfterparty
+                        ? "border-amber-400 bg-amber-50"
+                        : "border-gray-200 bg-white/60 hover:bg-amber-50/60",
+                  ].join(" ")}
+                >
+                  <span className="text-[10px] font-semibold text-amber-600 leading-none">뒤풀이</span>
+                  <span className="text-lg leading-none">{member.isAfterparty ? "🍻" : "☐"}</span>
+                </button>
+
+                {/* 출석 토글 */}
                 <button
                   onClick={() => toggleCheckin(member)}
                   className={[
-                    "w-full flex items-center justify-between p-4 rounded-2xl border-2 transition-all text-left pr-12",
-                    isPending
-                      ? "border-amber-400 bg-amber-50/60"
+                    "flex flex-col items-center gap-0.5 px-2.5 py-1.5 rounded-xl border transition-all active:scale-95 shrink-0",
+                    isPendingCheckin
+                      ? "border-amber-400 bg-amber-50"
                       : member.checkedIn
-                        ? "border-green-500 bg-green-50/80"
-                        : "border-violet-300 bg-violet-50/80 hover:bg-violet-100/60",
+                        ? "border-green-500 bg-green-50"
+                        : "border-gray-200 bg-white/60 hover:bg-green-50/60",
                   ].join(" ")}
                 >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-base">{member.nickname}</p>
-                    {isRegular && (
-                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-primary text-white leading-none">
-                        정회원
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {member.isAfterparty && (
-                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-amber-400 text-white leading-none">
-                        뒤풀이
-                      </span>
-                    )}
-                    <span className="text-2xl transition-all">
-                      {member.checkedIn ? "✅" : "☐"}
-                    </span>
-                  </div>
+                  <span className="text-[10px] font-semibold text-green-700 leading-none">출석</span>
+                  <span className="text-lg leading-none">{member.checkedIn ? "✅" : "☐"}</span>
                 </button>
+
+                {/* 제거 */}
                 <button
                   onClick={() => removeMember(member.id, member.nickname)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
                   aria-label="제거"
                 >
                   ✕

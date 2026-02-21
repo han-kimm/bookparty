@@ -122,18 +122,47 @@ export default function RegularMembersPage() {
     const entries = Object.entries(pendingChanges);
     if (!entries.length) return;
     setSaving(true);
+
+    const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
+
     await Promise.all(
-      entries.map(([memberId, changes]) =>
-        fetch(`/api/regular-members/${memberId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(changes),
-        })
-      )
+      entries.flatMap(([memberId, changes]) => {
+        const member = memberMap[memberId];
+        const promises: Promise<unknown>[] = [];
+
+        // attendance.* 변경 → attendances 컬렉션 (단일 진실원)
+        const attendanceEntries = Object.entries(changes).filter(([fp]) => fp.startsWith("attendance."));
+        for (const [fieldPath, checkedIn] of attendanceEntries) {
+          const meetingId = fieldPath.split(".")[1];
+          promises.push(
+            fetch(`/api/meetings/${meetingId}/attendance`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ nickname: member?.nickname, checkedIn }),
+            })
+          );
+        }
+
+        // dues.* 변경 → regularMembers 컬렉션
+        const duesChanges = Object.fromEntries(
+          Object.entries(changes).filter(([fp]) => fp.startsWith("dues."))
+        );
+        if (Object.keys(duesChanges).length > 0) {
+          promises.push(
+            fetch(`/api/regular-members/${memberId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(duesChanges),
+            })
+          );
+        }
+
+        return promises;
+      })
     );
 
     // 변경 이력 기록
-    const memberMap = Object.fromEntries(members.map((m) => [m.id, m.nickname]));
+    const memberNicknameMap = Object.fromEntries(members.map((m) => [m.id, m.nickname]));
     const logEntries: { target: string; from: string; to: string }[] = [];
     entries.forEach(([memberId, fields]) => {
       Object.entries(fields).forEach(([fieldPath, to]) => {
@@ -144,7 +173,7 @@ export default function RegularMembersPage() {
           ? (meetings.find((m) => m.id === key)?.title ?? key)
           : key;
         logEntries.push({
-          target: memberMap[memberId] ?? memberId,
+          target: memberNicknameMap[memberId] ?? memberId,
           from: `${colLabel} ${from ? (field === "attendance" ? "출석" : "납부") : (field === "attendance" ? "미출석" : "미납")}`,
           to: `${colLabel} ${to ? (field === "attendance" ? "출석" : "납부") : (field === "attendance" ? "미출석" : "미납")}`,
         });
@@ -220,7 +249,7 @@ export default function RegularMembersPage() {
         <p className="text-xs text-center text-muted-foreground mb-2">{sheetSyncMsg}</p>
       )}
       <div className="text-xs text-muted-foreground bg-muted/60 rounded-xl px-4 py-3 mb-4 space-y-1">
-        <p>· 출석은 각 모임 출석체크에서 자동으로 반영됩니다.</p>
+        <p>· 출석 셀을 탭하면 출석(참) / 미출석으로 토글됩니다. (출석체크와 동기화)</p>
         <p>· 회비 셀은 탭할 때마다 납부(O) → 미납(X) → 미설정 순으로 변경됩니다.</p>
         <p>· 변경 후 우측 하단 <strong>저장</strong> 버튼을 눌러야 반영됩니다.</p>
       </div>
@@ -299,10 +328,15 @@ export default function RegularMembersPage() {
                   const isLast = i === columns.length - 1;
                   if (col.type === "meeting") {
                     const attended = member.attendance?.[col.meeting.id] ?? false;
+                    const fieldPath = `attendance.${col.meeting.id}`;
+                    const isPendingCell = pendingChanges[member.id]?.[fieldPath] !== undefined;
                     return (
-                      <div
+                      <button
                         key={col.meeting.id}
-                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 ${attended ? "bg-green-50/40" : ""}`}
+                        onClick={() => toggle(member.id, fieldPath, attended)}
+                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 transition-all active:scale-95 ${
+                          isPendingCell ? "bg-amber-50/50" : attended ? "bg-green-50/40" : "hover:bg-violet-100/40"
+                        }`}
                         style={{ minHeight: 44 }}
                       >
                         {attended ? (
@@ -310,7 +344,7 @@ export default function RegularMembersPage() {
                         ) : (
                           <span className="text-muted-foreground/25 text-base">·</span>
                         )}
-                      </div>
+                      </button>
                     );
                   } else {
                     const paid = member.dues?.[col.quarter.key];

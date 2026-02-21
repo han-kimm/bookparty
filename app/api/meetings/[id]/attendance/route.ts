@@ -71,7 +71,7 @@ export async function DELETE(
   return NextResponse.json({ success: true });
 }
 
-// 출석 체크 상태 일괄 업데이트
+// 출석 체크 상태 업데이트 (memberId 또는 nickname 기반)
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -81,17 +81,40 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await req.json();
-  const { memberId, checkedIn } = body;
+  const { memberId, nickname, checkedIn, isAfterparty } = body;
 
-  await adminDb
-    .collection("attendances")
-    .doc(id)
-    .collection("members")
-    .doc(memberId)
-    .update({
-      checkedIn,
-      checkedInAt: checkedIn ? new Date().toISOString() : null,
-    });
+  const col = adminDb.collection("attendances").doc(id).collection("members");
+
+  if (memberId) {
+    // 기존 방식: memberId로 직접 업데이트
+    const update: Record<string, unknown> = {};
+    if (checkedIn !== undefined) {
+      update.checkedIn = checkedIn;
+      update.checkedInAt = checkedIn ? new Date().toISOString() : null;
+    }
+    if (isAfterparty !== undefined) {
+      update.isAfterparty = isAfterparty;
+    }
+    await col.doc(memberId).update(update);
+  } else if (nickname) {
+    // 닉네임 기반: 기존 문서 찾아서 업데이트, 없으면 생성
+    const snap = await col.where("nickname", "==", nickname).limit(1).get();
+    if (!snap.empty) {
+      await snap.docs[0].ref.update({
+        checkedIn,
+        checkedInAt: checkedIn ? new Date().toISOString() : null,
+      });
+    } else {
+      await col.add({
+        nickname,
+        checkedIn,
+        checkedInAt: checkedIn ? new Date().toISOString() : null,
+        isAfterparty: false,
+      });
+    }
+  } else {
+    return NextResponse.json({ error: "memberId 또는 nickname 필수" }, { status: 400 });
+  }
 
   return NextResponse.json({ success: true });
 }

@@ -10,6 +10,7 @@ interface AssociateMember {
   nickname: string;
   order: number;
   attendance: Record<string, boolean>;
+  promotedAt?: string;
 }
 
 interface Meeting {
@@ -27,8 +28,11 @@ export default function AssociateMembersPage() {
   const [members, setMembers] = useState<AssociateMember[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [sheetSyncMsg, setSheetSyncMsg] = useState<string | null>(null);
+  const [pendingChanges, setPendingChanges] = useState<Record<string, Record<string, boolean>>>({});
+  const savedStateRef = useRef<Record<string, Record<string, boolean>>>({});
 
   // 추가 다이얼로그
   const [addOpen, setAddOpen] = useState(false);
@@ -37,6 +41,10 @@ export default function AssociateMembersPage() {
 
   // 삭제 확인
   const [deleteTarget, setDeleteTarget] = useState<AssociateMember | null>(null);
+
+  // 정회원 전환
+  const [promoteTarget, setPromoteTarget] = useState<AssociateMember | null>(null);
+  const [promoting, setPromoting] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -49,6 +57,14 @@ export default function AssociateMembersPage() {
     const meetingsData = await meetingsRes.json();
 
     const list: AssociateMember[] = Array.isArray(membersData) ? membersData : [];
+    const state: Record<string, Record<string, boolean>> = {};
+    list.forEach((m) => {
+      state[m.id] = {};
+      Object.entries(m.attendance ?? {}).forEach(([k, v]) => {
+        state[m.id][`attendance.${k}`] = v;
+      });
+    });
+    savedStateRef.current = state;
     setMembers(list);
 
     const filtered = (Array.isArray(meetingsData) ? meetingsData : [])
@@ -59,6 +75,61 @@ export default function AssociateMembersPage() {
   };
 
   useEffect(() => { fetchAll(); }, []);
+
+  const toggle = (memberId: string, meetingId: string, currentValue: boolean) => {
+    const newValue = !currentValue;
+    const fieldPath = `attendance.${meetingId}`;
+    setMembers((list) =>
+      list.map((m) => {
+        if (m.id !== memberId) return m;
+        return { ...m, attendance: { ...m.attendance, [meetingId]: newValue } };
+      })
+    );
+    setPendingChanges((prev) => {
+      const memberPending = { ...(prev[memberId] ?? {}), [fieldPath]: newValue };
+      if ((savedStateRef.current[memberId]?.[fieldPath] ?? false) === newValue) {
+        delete memberPending[fieldPath];
+      }
+      const next = { ...prev };
+      if (Object.keys(memberPending).length === 0) {
+        delete next[memberId];
+      } else {
+        next[memberId] = memberPending;
+      }
+      return next;
+    });
+  };
+
+  const saveAll = async () => {
+    const entries = Object.entries(pendingChanges);
+    if (!entries.length) return;
+    setSaving(true);
+
+    const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
+
+    await Promise.all(
+      entries.flatMap(([memberId, changes]) => {
+        const member = memberMap[memberId];
+        return Object.entries(changes).map(([fieldPath, checkedIn]) => {
+          const meetingId = fieldPath.split(".")[1];
+          return fetch(`/api/meetings/${meetingId}/attendance`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nickname: member?.nickname, checkedIn }),
+          });
+        });
+      })
+    );
+
+    Object.entries(pendingChanges).forEach(([memberId, fields]) => {
+      if (!savedStateRef.current[memberId]) savedStateRef.current[memberId] = {};
+      Object.assign(savedStateRef.current[memberId], fields);
+    });
+    setPendingChanges({});
+    setSaving(false);
+
+    syncToSheets();
+  };
 
   const syncToSheets = async () => {
     setSheetSyncing(true);
@@ -75,6 +146,22 @@ export default function AssociateMembersPage() {
       setSheetSyncMsg("시트 반영 실패");
     } finally {
       setSheetSyncing(false);
+    }
+  };
+
+  const handlePromote = async () => {
+    if (!promoteTarget) return;
+    setPromoting(true);
+    try {
+      const res = await fetch(`/api/associate-members/${promoteTarget.id}/promote`, { method: "POST" });
+      if (res.ok) {
+        setMembers((list) =>
+          list.map((m) => m.id === promoteTarget.id ? { ...m, promotedAt: today } : m)
+        );
+      }
+    } finally {
+      setPromoting(false);
+      setPromoteTarget(null);
     }
   };
 
@@ -103,6 +190,8 @@ export default function AssociateMembersPage() {
     setLoading(true);
     fetchAll();
   };
+
+  const pendingCount = Object.keys(pendingChanges).length;
 
   if (loading) {
     return (
@@ -134,8 +223,10 @@ export default function AssociateMembersPage() {
       {sheetSyncMsg && (
         <p className="text-xs text-center text-muted-foreground mb-2">{sheetSyncMsg}</p>
       )}
-      <div className="text-xs text-muted-foreground bg-muted/60 rounded-xl px-4 py-3 mb-4">
-        <p>· 출석은 각 모임 출석체크에서 자동으로 반영됩니다.</p>
+      <div className="text-xs text-muted-foreground bg-muted/60 rounded-xl px-4 py-3 mb-4 space-y-1">
+        <p>· 셀을 탭하면 출석(참) / 미출석으로 토글됩니다. (출석체크와 동기화)</p>
+        <p>· 3회 이상 출석 시 정회원으로 전환할 수 있습니다.</p>
+        <p>· 변경 후 우측 하단 <strong>저장</strong> 버튼을 눌러야 반영됩니다.</p>
       </div>
 
       {members.length === 0 ? (
@@ -148,8 +239,12 @@ export default function AssociateMembersPage() {
           <div className="inline-block min-w-full rounded-2xl overflow-hidden border border-violet-300/60 shadow-sm" style={{ background: "oklch(0.97 0.012 290 / 0.70)", backdropFilter: "blur(24px)" }}>
             {/* 헤더 */}
             <div className="flex border-b border-violet-300/40" style={{ background: "oklch(0.54 0.23 293 / 0.05)" }}>
-              <div className="sticky left-0 z-20 flex items-center px-3 py-2.5 min-w-[88px] border-r border-violet-300/40 font-semibold text-xs text-muted-foreground uppercase tracking-wide" style={{ background: "oklch(0.54 0.23 293 / 0.05)" }}>
+              <div className="sticky left-0 z-20 flex items-center px-3 py-2.5 min-w-[100px] border-r border-violet-300/40 font-semibold text-xs text-muted-foreground uppercase tracking-wide" style={{ background: "oklch(0.54 0.23 293 / 0.05)" }}>
                 닉네임
+              </div>
+              {/* 출석 합계 + 전환 열 헤더 */}
+              <div className="w-16 min-w-[64px] flex items-center justify-center text-xs font-semibold text-muted-foreground border-r border-violet-300/35">
+                합계
               </div>
               {meetings.map((meeting) => (
                 <div
@@ -161,38 +256,81 @@ export default function AssociateMembersPage() {
                   <span>{formatDate(meeting.date)}</span>
                 </div>
               ))}
-              {/* 삭제 열 헤더 */}
               <div className="w-10 min-w-[40px]" />
             </div>
 
             {/* 행 */}
             {members.map((member, idx) => {
+              const isPendingRow = member.id in pendingChanges;
               const isEven = idx % 2 === 0;
-              const rowStyle = isEven
-                ? { background: "transparent" }
-                : { background: "oklch(0.54 0.23 293 / 0.02)" };
+              const isPromoted = !!member.promotedAt;
+              const attendanceCount = Object.values(member.attendance ?? {}).filter(Boolean).length;
+              const canPromote = attendanceCount >= 3 && !isPromoted;
+
+              const rowStyle = isPromoted
+                ? { background: "oklch(0.95 0.02 260 / 0.40)" }
+                : isPendingRow
+                  ? { background: "oklch(0.92 0.10 85 / 0.20)" }
+                  : isEven
+                    ? { background: "transparent" }
+                    : { background: "oklch(0.54 0.23 293 / 0.02)" };
 
               return (
                 <div
                   key={member.id}
-                  className="flex border-b last:border-b-0 border-violet-300/35"
+                  className={`flex border-b last:border-b-0 border-violet-300/35 transition-colors ${isPendingRow ? "ring-1 ring-inset ring-amber-400/40" : ""}`}
                   style={rowStyle}
                 >
                   {/* 닉네임 고정 열 */}
                   <div
-                    className="sticky left-0 z-10 flex items-center px-3 py-2.5 min-w-[88px] border-r border-violet-300/40"
-                    style={{ background: isEven ? "oklch(0.97 0.012 290 / 0.65)" : "oklch(0.99 0.006 290 / 0.50)", backdropFilter: "blur(24px)" }}
+                    className="sticky left-0 z-10 flex flex-col justify-center px-3 py-2 min-w-[100px] border-r border-violet-300/40"
+                    style={{ background: isPendingRow ? "oklch(0.95 0.08 85 / 0.25)" : isEven ? "oklch(0.97 0.012 290 / 0.65)" : "oklch(0.99 0.006 290 / 0.50)", backdropFilter: "blur(24px)" }}
                   >
-                    <span className="font-semibold text-sm leading-tight">{member.nickname}</span>
+                    <span className={`font-semibold text-sm leading-tight ${isPromoted ? "text-muted-foreground" : ""}`}>
+                      {member.nickname}
+                    </span>
+                    {isPromoted && (
+                      <span className="text-[10px] text-primary font-semibold leading-tight mt-0.5">
+                        정회원 전환됨
+                      </span>
+                    )}
                   </div>
 
-                  {/* 출석 셀 (읽기 전용) */}
+                  {/* 출석 합계 + 전환 버튼 */}
+                  <div className="w-16 min-w-[64px] flex items-center justify-center border-r border-violet-300/35" style={{ minHeight: 44 }}>
+                    {isPromoted ? (
+                      <span className="text-xs text-muted-foreground/50">{attendanceCount}회</span>
+                    ) : canPromote ? (
+                      <button
+                        onClick={() => setPromoteTarget(member)}
+                        className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg bg-primary text-white text-[10px] font-bold leading-tight hover:bg-primary/90 active:scale-95 transition-all"
+                      >
+                        <span>{attendanceCount}회</span>
+                        <span>전환↑</span>
+                      </button>
+                    ) : (
+                      <span className={`text-xs font-semibold ${attendanceCount >= 2 ? "text-amber-500" : "text-muted-foreground/50"}`}>
+                        {attendanceCount}회
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 출석 셀 */}
                   {meetings.map((meeting) => {
                     const attended = member.attendance?.[meeting.id] ?? false;
+                    const fieldPath = `attendance.${meeting.id}`;
+                    const isPendingCell = pendingChanges[member.id]?.[fieldPath] !== undefined;
                     return (
-                      <div
+                      <button
                         key={meeting.id}
-                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 ${attended ? "bg-green-50/40" : ""}`}
+                        onClick={() => !isPromoted && toggle(member.id, meeting.id, attended)}
+                        disabled={isPromoted}
+                        className={`${CELL_W} flex items-center justify-center border-r border-violet-300/35 transition-all ${
+                          isPromoted ? "opacity-40 cursor-default" :
+                          isPendingCell ? "bg-amber-50/50 active:scale-95" :
+                          attended ? "bg-green-50/40 active:scale-95" :
+                          "hover:bg-violet-100/40 active:scale-95"
+                        }`}
                         style={{ minHeight: 44 }}
                       >
                         {attended ? (
@@ -200,7 +338,7 @@ export default function AssociateMembersPage() {
                         ) : (
                           <span className="text-muted-foreground/25 text-base">·</span>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
 
@@ -219,6 +357,43 @@ export default function AssociateMembersPage() {
           </div>
         </div>
       )}
+
+      {/* 플로팅 저장 버튼 */}
+      {pendingCount > 0 && (
+        <div className="fixed bottom-24 left-0 right-0 flex justify-center z-50 px-4">
+          <Button
+            size="lg"
+            onClick={saveAll}
+            disabled={saving}
+            className="shadow-xl shadow-primary/30 rounded-full px-8"
+          >
+            {saving ? "저장 중..." : `변경사항 저장 (${pendingCount}명)`}
+          </Button>
+        </div>
+      )}
+
+      {/* 정회원 전환 확인 다이얼로그 */}
+      <Dialog open={!!promoteTarget} onOpenChange={(o) => { if (!o) setPromoteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>정회원으로 전환</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            <strong>{promoteTarget?.nickname}</strong>을(를) 정회원으로 전환하시겠습니까?
+          </p>
+          <p className="text-xs text-muted-foreground -mt-1">
+            준회원 출석 이력은 그대로 보존됩니다.
+          </p>
+          <div className="flex gap-3 mt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setPromoteTarget(null)}>
+              취소
+            </Button>
+            <Button className="flex-1" onClick={handlePromote} disabled={promoting}>
+              {promoting ? "전환 중..." : "정회원으로 전환"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 추가 다이얼로그 */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
